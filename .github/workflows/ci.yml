@@ -1,0 +1,45 @@
+name: CI
+
+# Runs on every PR targeting main — validates the build before merge.
+# Does NOT run on direct pushes to feature branches, keeping CI focused.
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: compliance
+          POSTGRES_USER: compliance
+          POSTGRES_PASSWORD: compliance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build and test
+        run: mvn verify --batch-mode
+        env:
+          # Placeholder keys — Spring context starts, integration tests skip via assumeTrue
+          OPENAI_API_KEY: test-placeholder
+          ANTHROPIC_API_KEY: test-placeholder
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
