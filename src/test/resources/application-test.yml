@@ -1,0 +1,14 @@
+# Test profile — allows Spring context to start without real API keys.
+# Integration tests that call the real embedding API use assumeTrue to skip
+# when OPENAI_API_KEY is not set to a real key or the embeddings table is empty.
+spring:
+  ai:
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:test-placeholder}
+      chat:
+        options:
+          model: claude-sonnet-4-5
+    openai:
+      api-key: ${OPENAI_API_KEY:test-placeholder}
+  jpa:
+    show-sql: false

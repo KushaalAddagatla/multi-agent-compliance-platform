@@ -1,0 +1,18 @@
+# Local dev profile — uses LocalStack instead of real AWS
+# Activate with: -Dspring.profiles.active=local
+
+aws:
+  endpoint-override: ${AWS_ENDPOINT_OVERRIDE:http://localhost:4566}
+  region: us-east-1
+  # LocalStack accepts any credentials
+  access-key-id: test
+  secret-access-key: test
+
+spring:
+  jpa:
+    show-sql: true
+
+logging:
+  level:
+    com.compliance.platform: DEBUG
+    software.amazon.awssdk: DEBUG

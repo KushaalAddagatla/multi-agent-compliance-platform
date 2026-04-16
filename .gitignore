@@ -1,0 +1,37 @@
+# Secrets — never commit
+.env
+*.env.local
+
+# Build output
+target/
+*.jar
+*.war
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+
+# Node / React dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Uploaded PDFs (ingested separately)
+src/main/resources/documents/
+
+# LocalStack state
+.localstack/
