@@ -1,5 +1,6 @@
 package com.compliance.platform.scanner;
 
+import com.compliance.platform.sqs.SqsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,26 +40,33 @@ public class ScannerAgent {
     private final EcsClient ecsClient;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final SqsService sqsService;
 
     public ScannerAgent(Ec2Client ec2Client,
                         IamClient iamClient,
                         S3Client s3Client,
                         EcsClient ecsClient,
                         JdbcTemplate jdbcTemplate,
-                        ObjectMapper objectMapper) {
+                        ObjectMapper objectMapper,
+                        SqsService sqsService) {
         this.ec2Client = ec2Client;
         this.iamClient = iamClient;
         this.s3Client = s3Client;
         this.ecsClient = ecsClient;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+        this.sqsService = sqsService;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Runs a full environment scan, stores the snapshot to PostgreSQL, and returns it.
-     * The returned snapshot's {@code scanRunId} matches the row inserted in scan_runs.
+     * Runs a full environment scan, persists the snapshot to PostgreSQL, publishes it
+     * to SQS for async analysis, and returns it.
+     *
+     * <p>The SQS publish is best-effort — if the queue is unavailable (e.g. LocalStack
+     * not running), a warning is logged and the snapshot is still returned. This prevents
+     * a queue outage from blocking the scan itself.
      */
     public EnvironmentSnapshot scan() {
         UUID runId = UUID.randomUUID();
@@ -71,6 +79,7 @@ public class ScannerAgent {
 
         EnvironmentSnapshot snapshot = new EnvironmentSnapshot(runId, ec2, iam, s3, ecs, Instant.now());
         persistSnapshot(runId, snapshot);
+        publishSnapshot(snapshot);
 
         log.info("Scanner complete — ec2={} iam={} s3={} ecs={} runId={}",
                 ec2.size(), iam.size(), s3.size(), ecs.size(), runId);
@@ -210,7 +219,7 @@ public class ScannerAgent {
         }
     }
 
-    // ── Persistence ───────────────────────────────────────────────────────────
+    // ── Persistence & messaging ───────────────────────────────────────────────
 
     private void persistSnapshot(UUID runId, EnvironmentSnapshot snapshot) {
         try {
@@ -221,6 +230,17 @@ public class ScannerAgent {
             log.debug("Snapshot persisted — runId={}", runId);
         } catch (Exception e) {
             log.error("Failed to persist snapshot runId={} — {}", runId, e.getMessage());
+        }
+    }
+
+    private void publishSnapshot(EnvironmentSnapshot snapshot) {
+        try {
+            String json = objectMapper.writeValueAsString(snapshot);
+            sqsService.publish(json);
+            log.info("Snapshot published to SQS — runId={}", snapshot.scanRunId());
+        } catch (Exception e) {
+            log.warn("Failed to publish snapshot to SQS runId={} — analysis will not run: {}",
+                    snapshot.scanRunId(), e.getMessage());
         }
     }
 }
