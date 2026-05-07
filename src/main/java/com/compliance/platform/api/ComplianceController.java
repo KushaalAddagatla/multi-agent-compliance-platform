@@ -12,17 +12,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * REST API for compliance findings and scan history.
+ * REST API for compliance findings, scores, and scan history.
  *
- * <p>Phase 2E endpoints — consumed by the React dashboard in Week 3:
+ * <p>Endpoints:
  * <ul>
- *   <li>{@code GET /api/violations} — filterable violations list</li>
- *   <li>{@code GET /api/scan-runs}  — scan run history</li>
+ *   <li>{@code GET /api/violations}              — filterable violations list</li>
+ *   <li>{@code GET /api/violations/{id}}          — violation detail</li>
+ *   <li>{@code GET /api/compliance-score}         — per-framework pass/fail scores</li>
+ *   <li>{@code GET /api/scan-runs}                — scan run history</li>
  * </ul>
- *
- * <p>Additional endpoints ({@code /api/violations/{id}}, {@code /api/compliance-score},
- * {@code /api/violations/{id}/remediation}, {@code PATCH /api/remediations/{id}/status},
- * {@code POST /api/violations/{id}/feedback}) are added in Week 3 / Phase 4.
  */
 @RestController
 @RequestMapping("/api")
@@ -73,6 +71,91 @@ public class ComplianceController {
                 sql.toString(), this::mapViolationRow, params.toArray());
 
         return ResponseEntity.ok(rows);
+    }
+
+    // ── GET /api/violations/{id} ──────────────────────────────────────────────
+
+    /**
+     * Returns a single violation by UUID, or 404 if not found.
+     */
+    @GetMapping("/violations/{id}")
+    public ResponseEntity<Map<String, Object>> getViolation(@PathVariable String id) {
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+                """
+                SELECT id, scan_run_id, resource_id, resource_type, control_id, framework,
+                       severity, reasoning, cited_excerpt, first_seen_at, is_new
+                FROM violations
+                WHERE id = ?::uuid
+                """,
+                this::mapViolationRow,
+                id);
+
+        if (rows.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(rows.get(0));
+    }
+
+    // ── GET /api/compliance-score ─────────────────────────────────────────────
+
+    /**
+     * Returns a per-framework compliance score.
+     *
+     * <p>Score = (total_distinct_controls_in_framework - violated_distinct_controls) /
+     *             total_distinct_controls_in_framework * 100, rounded to one decimal.
+     *
+     * <p>Denominator comes from the {@code embeddings} table (the ingested framework
+     * knowledge base), so the score reflects how many real controls are covered, not
+     * an arbitrary constant. If no embeddings exist for a framework yet, score is 0.
+     */
+    @GetMapping("/compliance-score")
+    public ResponseEntity<Map<String, Object>> getComplianceScore() {
+        List<Map<String, Object>> frameworkScores = jdbcTemplate.query(
+                """
+                WITH framework_totals AS (
+                    SELECT framework, COUNT(DISTINCT control_id) AS total_controls
+                    FROM embeddings
+                    GROUP BY framework
+                ),
+                violated AS (
+                    SELECT framework, COUNT(DISTINCT control_id) AS violated_controls
+                    FROM violations
+                    GROUP BY framework
+                )
+                SELECT
+                    ft.framework,
+                    ft.total_controls,
+                    COALESCE(v.violated_controls, 0)                        AS violated_controls,
+                    ROUND(
+                        CASE WHEN ft.total_controls = 0 THEN 0
+                        ELSE (ft.total_controls - COALESCE(v.violated_controls, 0))::numeric
+                             / ft.total_controls * 100
+                        END, 1
+                    )                                                        AS score
+                FROM framework_totals ft
+                LEFT JOIN violated v ON v.framework = ft.framework
+                ORDER BY ft.framework
+                """,
+                (rs, row) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("framework",        rs.getString("framework"));
+                    m.put("totalControls",    rs.getLong("total_controls"));
+                    m.put("violatedControls", rs.getLong("violated_controls"));
+                    m.put("score",            rs.getDouble("score"));
+                    return m;
+                });
+
+        double overall = frameworkScores.isEmpty() ? 0.0
+                : frameworkScores.stream()
+                        .mapToDouble(m -> (Double) m.get("score"))
+                        .average()
+                        .orElse(0.0);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("frameworks", frameworkScores);
+        response.put("overallScore", Math.round(overall * 10.0) / 10.0);
+
+        return ResponseEntity.ok(response);
     }
 
     // ── GET /api/scan-runs ────────────────────────────────────────────────────
