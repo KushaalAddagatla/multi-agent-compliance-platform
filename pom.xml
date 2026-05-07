@@ -150,6 +150,14 @@
             <version>${springdoc.version}</version>
         </dependency>
 
+        <!-- ── dotenv: auto-loads .env file for local dev ── -->
+        <!-- In production (Docker/EC2) no .env file is present, so this is a no-op there. -->
+        <dependency>
+            <groupId>me.paulschwarz</groupId>
+            <artifactId>spring-dotenv</artifactId>
+            <version>4.0.0</version>
+        </dependency>
+
         <!-- ── Test ── -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
