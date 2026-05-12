@@ -158,6 +158,25 @@ public class ComplianceController {
         return ResponseEntity.ok(response);
     }
 
+    // ── POST /api/violations/{id}/feedback ───────────────────────────────────
+
+    /**
+     * Records a false-positive flag on a violation.
+     * Stored to {@code false_positive_feedback} and later injected as few-shot examples
+     * into the Analyzer prompt (Phase 4) to reduce repeat false positives over time.
+     */
+    @PostMapping("/violations/{id}/feedback")
+    public ResponseEntity<Void> submitFeedback(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body) {
+
+        String reason = body.getOrDefault("reason", "Marked as false positive");
+        jdbcTemplate.update(
+                "INSERT INTO false_positive_feedback (violation_id, reason) VALUES (?::uuid, ?)",
+                id, reason);
+        return ResponseEntity.ok().build();
+    }
+
     // ── GET /api/scan-runs ────────────────────────────────────────────────────
 
     /**
