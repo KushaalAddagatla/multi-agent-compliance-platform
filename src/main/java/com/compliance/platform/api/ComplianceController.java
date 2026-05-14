@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * REST API for compliance findings, scores, and scan history.
@@ -177,6 +178,67 @@ public class ComplianceController {
         return ResponseEntity.ok().build();
     }
 
+    // ── GET /api/violations/{id}/remediation ─────────────────────────────────
+
+    /**
+     * Returns the remediation plan for a given violation, or 404 if none exists yet.
+     * The Remediator Agent generates plans lazily — this endpoint returning 404 simply
+     * means the Orchestrator hasn't run a remediation pass for this violation yet.
+     */
+    @GetMapping("/violations/{id}/remediation")
+    public ResponseEntity<Map<String, Object>> getRemediation(@PathVariable String id) {
+        if (!isValidUuid(id)) return ResponseEntity.notFound().build();
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+                """
+                SELECT id, violation_id, steps, cli_commands, terraform_patch,
+                       auto_remediable, approval_status, created_at, updated_at
+                FROM remediation_plans
+                WHERE violation_id = ?::uuid
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                this::mapRemediationRow,
+                id);
+
+        if (rows.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(rows.get(0));
+    }
+
+    // ── PATCH /api/remediations/{id}/status ──────────────────────────────────
+
+    /**
+     * Approves or rejects a remediation plan.
+     *
+     * <p>This endpoint records the human decision — it does NOT execute any AWS changes.
+     * Execution is intentionally out of scope: the human-in-the-loop gate is an
+     * architectural safety decision, not a missing feature.
+     *
+     * @param body must contain {@code "status"}: PENDING | APPROVED | REJECTED
+     */
+    @PatchMapping("/remediations/{id}/status")
+    public ResponseEntity<Void> updateRemediationStatus(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body) {
+
+        if (!isValidUuid(id)) return ResponseEntity.notFound().build();
+        String status = body.get("status");
+        if (status == null || !List.of("PENDING", "APPROVED", "REJECTED").contains(status)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        int updated = jdbcTemplate.update(
+                """
+                UPDATE remediation_plans
+                SET approval_status = ?, updated_at = NOW()
+                WHERE id = ?::uuid
+                """,
+                status, id);
+
+        return updated > 0 ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
+    }
+
     // ── GET /api/scan-runs ────────────────────────────────────────────────────
 
     /**
@@ -205,6 +267,12 @@ public class ComplianceController {
         return ResponseEntity.ok(rows);
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private boolean isValidUuid(String s) {
+        try { UUID.fromString(s); return true; } catch (IllegalArgumentException e) { return false; }
+    }
+
     // ── Row mappers ───────────────────────────────────────────────────────────
 
     private Map<String, Object> mapViolationRow(ResultSet rs, int row) throws SQLException {
@@ -228,6 +296,20 @@ public class ComplianceController {
         m.put("id",             rs.getObject("id").toString());
         m.put("createdAt",      rs.getTimestamp("created_at").toInstant().toString());
         m.put("violationCount", rs.getLong("violation_count"));
+        return m;
+    }
+
+    private Map<String, Object> mapRemediationRow(ResultSet rs, int row) throws SQLException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id",              rs.getObject("id").toString());
+        m.put("violationId",     rs.getObject("violation_id").toString());
+        m.put("steps",           rs.getString("steps"));
+        m.put("cliCommands",     rs.getString("cli_commands"));
+        m.put("terraformPatch",  rs.getString("terraform_patch"));
+        m.put("autoRemediable",  rs.getBoolean("auto_remediable"));
+        m.put("approvalStatus",  rs.getString("approval_status"));
+        m.put("createdAt",       rs.getTimestamp("created_at").toInstant().toString());
+        m.put("updatedAt",       rs.getTimestamp("updated_at").toInstant().toString());
         return m;
     }
 }
