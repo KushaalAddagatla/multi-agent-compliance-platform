@@ -52,6 +52,10 @@ aws:
   ses:
     from-email: ${SES_FROM_EMAIL:}
     to-email: ${SES_TO_EMAIL:}
+  cloudwatch:
+    namespace: ${CLOUDWATCH_NAMESPACE:CompliancePlatform}
+  sns:
+    alert-topic-arn: ${SNS_ALERT_TOPIC_ARN:}
 
 ingestion:
   # Directory where compliance framework PDFs are stored.
