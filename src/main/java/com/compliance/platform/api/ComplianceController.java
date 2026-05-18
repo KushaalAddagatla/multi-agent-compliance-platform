@@ -1,5 +1,6 @@
 package com.compliance.platform.api;
 
+import com.compliance.platform.orchestrator.ComplianceOrchestrator;
 import com.compliance.platform.reporter.ComplianceReport;
 import com.compliance.platform.reporter.ReporterAgent;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,8 @@ import java.util.UUID;
  *   <li>{@code GET /api/scan-runs}                — scan run history</li>
  *   <li>{@code GET /api/compliance-reports}       — past compliance report history</li>
  *   <li>{@code POST /api/reports/generate}        — manually trigger a report run</li>
+ *   <li>{@code GET /api/pipeline-runs}            — pipeline run history</li>
+ *   <li>{@code POST /api/pipeline/trigger}        — manually trigger a full pipeline run</li>
  * </ul>
  */
 @RestController
@@ -33,10 +36,14 @@ public class ComplianceController {
 
     private final JdbcTemplate jdbcTemplate;
     private final ReporterAgent reporterAgent;
+    private final ComplianceOrchestrator orchestrator;
 
-    public ComplianceController(JdbcTemplate jdbcTemplate, ReporterAgent reporterAgent) {
+    public ComplianceController(JdbcTemplate jdbcTemplate,
+                                ReporterAgent reporterAgent,
+                                ComplianceOrchestrator orchestrator) {
         this.jdbcTemplate = jdbcTemplate;
         this.reporterAgent = reporterAgent;
+        this.orchestrator = orchestrator;
     }
 
     // ── GET /api/violations ───────────────────────────────────────────────────
@@ -319,6 +326,51 @@ public class ComplianceController {
         return ResponseEntity.ok(response);
     }
 
+    // ── GET /api/pipeline-runs ────────────────────────────────────────────────
+
+    /**
+     * Returns recent pipeline run history, newest first.
+     * Each row shows run status, timing, violation counts, and any error message.
+     *
+     * @param limit max rows returned (default 20)
+     */
+    @GetMapping("/pipeline-runs")
+    public ResponseEntity<List<Map<String, Object>>> getPipelineRuns(
+            @RequestParam(defaultValue = "20") int limit) {
+
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+                """
+                SELECT id, start_time, end_time, status,
+                       violations_found, new_violations, error_message
+                FROM pipeline_runs
+                ORDER BY start_time DESC
+                LIMIT ?
+                """,
+                this::mapPipelineRunRow,
+                limit);
+
+        return ResponseEntity.ok(rows);
+    }
+
+    // ── POST /api/pipeline/trigger ────────────────────────────────────────────
+
+    /**
+     * Manually triggers a full compliance pipeline run (Scanner → Analyzer →
+     * Remediator → Reporter) in the background.
+     *
+     * <p>Returns immediately with the new pipeline run ID and {@code status = RUNNING}.
+     * Poll {@code GET /api/pipeline-runs} to observe completion.
+     */
+    @PostMapping("/pipeline/trigger")
+    public ResponseEntity<Map<String, Object>> triggerPipeline() {
+        java.util.UUID runId = orchestrator.triggerAsync();
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("pipelineRunId", runId.toString());
+        response.put("status", "RUNNING");
+        response.put("message", "Pipeline started — poll GET /api/pipeline-runs to track progress");
+        return ResponseEntity.accepted().body(response);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private boolean isValidUuid(String s) {
@@ -374,6 +426,19 @@ public class ComplianceController {
         m.put("totalViolations", rs.getInt("total_violations"));
         m.put("s3Key",           rs.getString("s3_key"));
         m.put("createdAt",       rs.getTimestamp("created_at").toInstant().toString());
+        return m;
+    }
+
+    private Map<String, Object> mapPipelineRunRow(ResultSet rs, int row) throws SQLException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id",              rs.getObject("id").toString());
+        m.put("startTime",       rs.getTimestamp("start_time").toInstant().toString());
+        var endTs = rs.getTimestamp("end_time");
+        m.put("endTime",         endTs != null ? endTs.toInstant().toString() : null);
+        m.put("status",          rs.getString("status"));
+        m.put("violationsFound", rs.getInt("violations_found"));
+        m.put("newViolations",   rs.getInt("new_violations"));
+        m.put("errorMessage",    rs.getString("error_message"));
         return m;
     }
 }

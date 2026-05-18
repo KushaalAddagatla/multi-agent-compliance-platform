@@ -8,12 +8,14 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.cloudwatch.CloudWatchClient;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ecs.EcsClient;
 import software.amazon.awssdk.services.iam.IamClient;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient;
 import software.amazon.awssdk.services.sesv2.SesV2Client;
+import software.amazon.awssdk.services.sns.SnsClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 import java.net.URI;
@@ -99,5 +101,15 @@ public class AwsConfig {
     @Bean
     public SecretsManagerClient secretsManagerClient() {
         return applyCommon(SecretsManagerClient.builder()).build();
+    }
+
+    @Bean
+    public CloudWatchClient cloudWatchClient() {
+        return applyCommon(CloudWatchClient.builder()).build();
+    }
+
+    @Bean
+    public SnsClient snsClient() {
+        return applyCommon(SnsClient.builder()).build();
     }
 }

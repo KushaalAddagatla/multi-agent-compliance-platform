@@ -67,8 +67,23 @@ public class ScannerAgent {
      * <p>The SQS publish is best-effort — if the queue is unavailable (e.g. LocalStack
      * not running), a warning is logged and the snapshot is still returned. This prevents
      * a queue outage from blocking the scan itself.
+     *
+     * <p>Used for ad-hoc, externally triggered scans. The {@link #scanOnly()} variant
+     * is used by the {@code ComplianceOrchestrator} which controls its own analysis
+     * sequencing directly, avoiding a duplicate analysis from the SqsAnalyzerPoller.
      */
     public EnvironmentSnapshot scan() {
+        EnvironmentSnapshot snapshot = scanOnly();
+        publishSnapshot(snapshot);
+        return snapshot;
+    }
+
+    /**
+     * Runs a full environment scan, persists the snapshot, and returns it — without
+     * publishing to SQS. Used by the Orchestrator, which calls AnalyzerAgent directly
+     * to avoid the SqsAnalyzerPoller running a second analysis on the same snapshot.
+     */
+    public EnvironmentSnapshot scanOnly() {
         UUID runId = UUID.randomUUID();
         log.info("Scanner starting — runId={}", runId);
 
@@ -79,7 +94,6 @@ public class ScannerAgent {
 
         EnvironmentSnapshot snapshot = new EnvironmentSnapshot(runId, ec2, iam, s3, ecs, Instant.now());
         persistSnapshot(runId, snapshot);
-        publishSnapshot(snapshot);
 
         log.info("Scanner complete — ec2={} iam={} s3={} ecs={} runId={}",
                 ec2.size(), iam.size(), s3.size(), ecs.size(), runId);
