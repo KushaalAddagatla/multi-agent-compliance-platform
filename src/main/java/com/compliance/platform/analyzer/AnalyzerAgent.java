@@ -35,7 +35,7 @@ public class AnalyzerAgent {
 
     private static final Logger log = LoggerFactory.getLogger(AnalyzerAgent.class);
 
-    private static final String SYSTEM_PROMPT = """
+    private static final String BASE_SYSTEM_PROMPT = """
             You are a cloud security compliance analyst. You will be given the state of an AWS \
             resource and relevant sections from security frameworks (NIST 800-53, CIS AWS Benchmark, SOC2).
 
@@ -57,6 +57,37 @@ public class AnalyzerAgent {
     private static final String RETRY_SUFFIX =
             "\n\nCRITICAL: Your entire response must be a valid JSON array only. " +
             "No markdown, no code fences, no text before or after the array.";
+
+    /**
+     * Builds the system prompt for this analysis run.
+     * Loads up to 3 recent false-positive feedback examples from the DB and appends
+     * them as a "KNOWN FALSE POSITIVES" section. When no feedback exists yet, the
+     * base prompt is returned unchanged.
+     *
+     * <p>Called once per {@link #analyze(EnvironmentSnapshot)} run — not per resource —
+     * to avoid N redundant DB queries for N resources in a single run.
+     */
+    private String buildSystemPrompt() {
+        List<String> examples = jdbcTemplate.query("""
+                SELECT v.framework, v.control_id, v.resource_type, v.reasoning, fpf.reason
+                FROM false_positive_feedback fpf
+                JOIN violations v ON v.id = fpf.violation_id
+                ORDER BY fpf.created_at DESC
+                LIMIT 3
+                """,
+                (rs, row) -> String.format("[%s %s] on %s — flagged: \"%s\"",
+                        rs.getString("framework"),
+                        rs.getString("control_id"),
+                        rs.getString("resource_type"),
+                        rs.getString("reason")));
+
+        if (examples.isEmpty()) return BASE_SYSTEM_PROMPT;
+
+        var sb = new StringBuilder(BASE_SYSTEM_PROMPT);
+        sb.append("\n\nKNOWN FALSE POSITIVES — do not flag these specific patterns:\n");
+        examples.forEach(ex -> sb.append("- ").append(ex).append("\n"));
+        return sb.toString();
+    }
 
     private final RetrievalService retrievalService;
     private final ChatClient chatClient;
@@ -88,23 +119,26 @@ public class AnalyzerAgent {
                 snapshot.s3Buckets().size(),
                 snapshot.ecsTasks().size());
 
+        // Build the system prompt once — includes any false-positive few-shot examples
+        String systemPrompt = buildSystemPrompt();
+
         List<Violation> all = new ArrayList<>();
 
         for (Ec2InstanceInfo r : snapshot.ec2Instances()) {
             all.addAll(analyzeResource(scanRunId, "EC2_INSTANCE", r.instanceId(), r,
-                    ragQuery(r)));
+                    ragQuery(r), systemPrompt));
         }
         for (IamUserInfo r : snapshot.iamUsers()) {
             all.addAll(analyzeResource(scanRunId, "IAM_USER", r.username(), r,
-                    ragQuery(r)));
+                    ragQuery(r), systemPrompt));
         }
         for (S3BucketInfo r : snapshot.s3Buckets()) {
             all.addAll(analyzeResource(scanRunId, "S3_BUCKET", r.bucketName(), r,
-                    ragQuery(r)));
+                    ragQuery(r), systemPrompt));
         }
         for (EcsTaskInfo r : snapshot.ecsTasks()) {
             all.addAll(analyzeResource(scanRunId, "ECS_TASK_DEF", r.taskDefinitionArn(), r,
-                    ragQuery(r)));
+                    ragQuery(r), systemPrompt));
         }
 
         if (!all.isEmpty()) {
@@ -119,7 +153,7 @@ public class AnalyzerAgent {
 
     private List<Violation> analyzeResource(UUID scanRunId, String resourceType,
                                              String resourceId, Object resource,
-                                             String ragQuery) {
+                                             String ragQuery, String systemPrompt) {
         List<RetrievedChunk> chunks = retrievalService.search(ragQuery, 3);
         if (chunks.isEmpty()) {
             log.warn("No RAG chunks for {} {} — skipping (embeddings table empty?)",
@@ -129,7 +163,7 @@ public class AnalyzerAgent {
 
         try {
             String resourceJson = objectMapper.writeValueAsString(resource);
-            List<ViolationDto> dtos = callClaude(resourceType, resourceId, resourceJson, chunks);
+            List<ViolationDto> dtos = callClaude(resourceType, resourceId, resourceJson, chunks, systemPrompt);
 
             return dtos.stream()
                     .map(dto -> new Violation(
@@ -148,11 +182,12 @@ public class AnalyzerAgent {
     // ── Claude interaction ────────────────────────────────────────────────────
 
     private List<ViolationDto> callClaude(String resourceType, String resourceId,
-                                           String resourceJson, List<RetrievedChunk> chunks) throws Exception {
+                                           String resourceJson, List<RetrievedChunk> chunks,
+                                           String systemPrompt) throws Exception {
         String userPrompt = buildUserPrompt(resourceType, resourceJson, chunks);
 
         String response = chatClient.prompt()
-                .system(SYSTEM_PROMPT)
+                .system(systemPrompt)
                 .user(userPrompt)
                 .call()
                 .content();
@@ -162,7 +197,7 @@ public class AnalyzerAgent {
         } catch (Exception e) {
             log.warn("Malformed JSON from Claude for {} {} — retrying", resourceType, resourceId);
             String retryResponse = chatClient.prompt()
-                    .system(SYSTEM_PROMPT + RETRY_SUFFIX)
+                    .system(systemPrompt + RETRY_SUFFIX)
                     .user(userPrompt)
                     .call()
                     .content();
