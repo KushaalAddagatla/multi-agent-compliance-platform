@@ -1,0 +1,37 @@
+# Build artifacts
+target/
+*.class
+
+# Maven wrapper cache
+.mvn/repository/
+
+# Frontend — not part of the Spring Boot image
+compliance-dashboard/node_modules/
+compliance-dashboard/dist/
+
+# Environment files — never bake into image
+.env
+.env.prod
+.env.local
+
+# Git and IDE
+.git/
+.gitignore
+.idea/
+*.iml
+.vscode/
+
+# Docker files themselves (no need to copy into image)
+Dockerfile
+docker-compose*.yml
+nginx/
+
+# Scripts and docs
+scripts/
+*.md
+docs/
+
+# Test artifacts
+**/*Test.java
+**/*IT.java
+surefire-reports/
