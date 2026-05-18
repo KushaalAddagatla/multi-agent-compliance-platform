@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Service;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -130,7 +131,7 @@ public class ReporterAgent {
         Map<String, Long> result = new LinkedHashMap<>();
         jdbcTemplate.query(
                 "SELECT framework, COUNT(*) AS cnt FROM violations GROUP BY framework ORDER BY framework",
-                rs -> result.put(rs.getString("framework"), rs.getLong("cnt")));
+                (RowCallbackHandler) rs -> result.put(rs.getString("framework"), rs.getLong("cnt")));
         return result;
     }
 
@@ -143,7 +144,7 @@ public class ReporterAgent {
                 GROUP BY severity
                 ORDER BY CASE severity WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END
                 """,
-                rs -> result.put(rs.getString("severity"), rs.getLong("cnt")));
+                (RowCallbackHandler) rs -> result.put(rs.getString("severity"), rs.getLong("cnt")));
         return result;
     }
 
@@ -199,7 +200,7 @@ public class ReporterAgent {
                 LEFT JOIN violated v ON v.framework = ft.framework
                 ORDER BY ft.framework
                 """,
-                rs -> scores.put(rs.getString("framework"), rs.getDouble("score")));
+                (RowCallbackHandler) rs -> scores.put(rs.getString("framework"), rs.getDouble("score")));
         return scores;
     }
 
