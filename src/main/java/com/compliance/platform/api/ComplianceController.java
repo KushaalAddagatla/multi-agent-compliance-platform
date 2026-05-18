@@ -1,5 +1,7 @@
 package com.compliance.platform.api;
 
+import com.compliance.platform.reporter.ComplianceReport;
+import com.compliance.platform.reporter.ReporterAgent;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +23,8 @@ import java.util.UUID;
  *   <li>{@code GET /api/violations/{id}}          — violation detail</li>
  *   <li>{@code GET /api/compliance-score}         — per-framework pass/fail scores</li>
  *   <li>{@code GET /api/scan-runs}                — scan run history</li>
+ *   <li>{@code GET /api/compliance-reports}       — past compliance report history</li>
+ *   <li>{@code POST /api/reports/generate}        — manually trigger a report run</li>
  * </ul>
  */
 @RestController
@@ -28,9 +32,11 @@ import java.util.UUID;
 public class ComplianceController {
 
     private final JdbcTemplate jdbcTemplate;
+    private final ReporterAgent reporterAgent;
 
-    public ComplianceController(JdbcTemplate jdbcTemplate) {
+    public ComplianceController(JdbcTemplate jdbcTemplate, ReporterAgent reporterAgent) {
         this.jdbcTemplate = jdbcTemplate;
+        this.reporterAgent = reporterAgent;
     }
 
     // ── GET /api/violations ───────────────────────────────────────────────────
@@ -267,6 +273,52 @@ public class ComplianceController {
         return ResponseEntity.ok(rows);
     }
 
+    // ── GET /api/compliance-reports ──────────────────────────────────────────
+
+    /**
+     * Returns recent compliance reports, newest first.
+     *
+     * @param limit max rows returned (default 20)
+     */
+    @GetMapping("/compliance-reports")
+    public ResponseEntity<List<Map<String, Object>>> getComplianceReports(
+            @RequestParam(defaultValue = "20") int limit) {
+
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+                """
+                SELECT id, nist_score, cis_score, soc2_score, total_violations, s3_key, created_at
+                FROM compliance_reports
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                this::mapReportRow,
+                limit);
+
+        return ResponseEntity.ok(rows);
+    }
+
+    // ── POST /api/reports/generate ────────────────────────────────────────────
+
+    /**
+     * Manually triggers a compliance report run for today's date.
+     *
+     * <p>This is equivalent to the nightly Orchestrator-triggered report but invocable on demand.
+     * The response contains the persisted report record including any S3 key if upload succeeded.
+     */
+    @PostMapping("/reports/generate")
+    public ResponseEntity<Map<String, Object>> generateReport() {
+        ComplianceReport report = reporterAgent.generateReport();
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id",              report.id().toString());
+        response.put("nistScore",       report.nistScore());
+        response.put("cisScore",        report.cisScore());
+        response.put("soc2Score",       report.soc2Score());
+        response.put("totalViolations", report.totalViolations());
+        response.put("s3Key",           report.s3Key());
+        response.put("createdAt",       report.createdAt().toString());
+        return ResponseEntity.ok(response);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private boolean isValidUuid(String s) {
@@ -310,6 +362,18 @@ public class ComplianceController {
         m.put("approvalStatus",  rs.getString("approval_status"));
         m.put("createdAt",       rs.getTimestamp("created_at").toInstant().toString());
         m.put("updatedAt",       rs.getTimestamp("updated_at").toInstant().toString());
+        return m;
+    }
+
+    private Map<String, Object> mapReportRow(ResultSet rs, int row) throws SQLException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id",              rs.getObject("id").toString());
+        m.put("nistScore",       rs.getDouble("nist_score"));
+        m.put("cisScore",        rs.getDouble("cis_score"));
+        m.put("soc2Score",       rs.getDouble("soc2_score"));
+        m.put("totalViolations", rs.getInt("total_violations"));
+        m.put("s3Key",           rs.getString("s3_key"));
+        m.put("createdAt",       rs.getTimestamp("created_at").toInstant().toString());
         return m;
     }
 }
